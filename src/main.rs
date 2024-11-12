@@ -1,7 +1,4 @@
-use std::{
-    path::PathBuf,
-    time::{Duration, Instant},
-};
+use std::{path::PathBuf, time::Instant};
 
 use clap::{arg, command, Parser};
 use clap_derive::Subcommand;
@@ -9,6 +6,7 @@ use log::{debug, error, info};
 use serde::{Deserialize, Serialize};
 use watcher::start_watcher;
 
+mod config;
 mod watcher;
 
 /***
@@ -22,23 +20,14 @@ pub struct RepositoryState {
     last_change_at: Option<Instant>,
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct RepositoryConfig {
-    path: PathBuf,
-    debounce_time: Duration,
-    // TODO commit_msg:
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct Configuration {
-    repositories: Vec<RepositoryConfig>,
-}
-
 #[derive(Parser)]
 #[command(version, about, long_about = None)] // Read from `Cargo.toml`
 struct CliArgs {
     #[command(subcommand)]
     command: Commands,
+
+    #[command(flatten)]
+    verbose: clap_verbosity_flag::Verbosity,
 }
 
 #[derive(Debug, Subcommand)]
@@ -56,12 +45,11 @@ enum Commands {
 
 #[tokio::main]
 async fn main() {
+    let args = CliArgs::parse();
     env_logger::Builder::new()
-        // .filter_level(args.verbose.log_level_filter())
-        .filter_level(log::LevelFilter::Trace)
+        .filter_level(args.verbose.log_level_filter())
         .init();
 
-    let args = CliArgs::parse();
     match args.command {
         Commands::Add { path } => {
             error!("TODO add functionality")
