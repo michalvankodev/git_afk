@@ -1,9 +1,8 @@
-use std::{path::PathBuf, time::Instant};
-
 use clap::{arg, command, Parser};
 use clap_derive::Subcommand;
-use log::{debug, error, info};
-use serde::{Deserialize, Serialize};
+use config::add_repo;
+use log::error;
+use std::path::PathBuf;
 use watcher::start_watcher;
 
 mod config;
@@ -16,10 +15,6 @@ mod watcher;
     4. Timer countdown. If there are changes then commit and push according to configuration
     5. Installation into the OS as daemon
 */
-pub struct RepositoryState {
-    last_change_at: Option<Instant>,
-}
-
 #[derive(Parser)]
 #[command(version, about, long_about = None)] // Read from `Cargo.toml`
 struct CliArgs {
@@ -52,10 +47,16 @@ async fn main() {
 
     match args.command {
         Commands::Add { path } => {
-            error!("TODO add functionality")
+            let add_result = add_repo(&path);
+            if let Err(error) = add_result {
+                error!("Failed to add repository to config: {:?}", error);
+            }
         }
         Commands::Watch => {
-            start_watcher().await;
+            let watch_result = start_watcher().await;
+            if let Err(error) = watch_result {
+                error!("Failed to start watching for file changes: {:?}", error);
+            }
         }
     }
 }

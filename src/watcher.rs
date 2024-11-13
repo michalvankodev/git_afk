@@ -1,7 +1,7 @@
 use crate::config::Configuration;
 use log::{debug, info};
 use notify::RecursiveMode;
-use notify_debouncer_full::{new_debouncer, DebounceEventResult, DebouncedEvent};
+use notify_debouncer_full::{new_debouncer, DebounceEventResult, DebouncedEvent, Debouncer};
 use std::{
     collections::HashMap,
     path::PathBuf,
@@ -47,9 +47,10 @@ pub async fn start_watcher() -> Result<(), anyhow::Error> {
     let state_clone = watch_state.clone();
     let repositories = state_clone.lock().await;
 
-    repositories.values().for_each(|repo_state| {
-        watch_repo(repo_state);
-    });
+    let _debouncers = repositories
+        .values()
+        .map(watch_repo)
+        .collect::<Vec<Debouncer<notify::INotifyWatcher, notify_debouncer_full::NoCache>>>();
 
     // Main application loop
     info!("Starting git_afk to watch repositories");
@@ -61,8 +62,10 @@ pub async fn start_watcher() -> Result<(), anyhow::Error> {
     }
 }
 
-fn watch_repo(repo_state: &RepositoryState) {
-    debug!("Starting check for changes!");
+fn watch_repo(
+    repo_state: &RepositoryState,
+) -> Debouncer<notify::INotifyWatcher, notify_debouncer_full::NoCache> {
+    debug!("Starting check for changes for {:?}!", repo_state.path);
 
     let mut debouncer = new_debouncer(
         Duration::from_secs(2),
@@ -81,6 +84,9 @@ fn watch_repo(repo_state: &RepositoryState) {
     debouncer
         .watch(&repo_state.path, RecursiveMode::Recursive)
         .unwrap();
+
+    debug!("Watcher for {:?} has been initialized", repo_state.path);
+    debouncer
 }
 
 fn handle_watch_event(event: &DebouncedEvent) {
