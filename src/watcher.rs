@@ -9,19 +9,21 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use tokio::{runtime::Handle, sync::Mutex, time::sleep};
+use tokio::{runtime::Handle, sync::Mutex, task, time::sleep};
 
 pub struct RepositoryState {
     path: PathBuf,
     gitignore_matcher: Gitignore,
+    debounce_time: Duration,
     last_change_at: Instant,
 }
 
 impl RepositoryState {
-    fn new(path: PathBuf, gitignore_matcher: Gitignore) -> Self {
+    fn new(path: PathBuf, gitignore_matcher: Gitignore, debounce_time: Duration) -> Self {
         Self {
             path,
             gitignore_matcher,
+            debounce_time,
             last_change_at: Instant::now(),
         }
     }
@@ -36,9 +38,10 @@ pub async fn start_watcher() -> Result<(), anyhow::Error> {
         HashMap::from_iter(cfg.repositories.iter().map(|repo| {
             let path = repo.path.clone();
             let gitignore_matcher = GitignoreBuilder::new(&path).build().unwrap();
+            let debounce_time = repo.debounce_time;
             (
                 path.to_str().unwrap().to_string(),
-                RepositoryState::new(path, gitignore_matcher),
+                RepositoryState::new(path, gitignore_matcher, debounce_time),
             )
         }));
 
@@ -61,8 +64,12 @@ pub async fn start_watcher() -> Result<(), anyhow::Error> {
     // Main application loop
     info!("Starting git_afk to watch repositories");
     loop {
-        // Do some work
+        // Check all watched repositories whether we want to commit and push
+        debug!("Checking repositories");
+        let watch_state = watch_state.clone();
+        check_for_timeouts(watch_state).await;
 
+        debug!("Waiting for another loop");
         // Sleep for 5 seconds
         sleep(Duration::from_secs(5)).await;
     }
@@ -137,4 +144,24 @@ fn handle_watch_event(debounced_event: &DebouncedEvent, repo_state: &mut Reposit
     }
 
     repo_state.last_change_at = Instant::now();
+}
+
+async fn check_for_timeouts(watch_state: Arc<Mutex<HashMap<String, RepositoryState>>>) {
+    let state = watch_state.lock().await;
+    let repositories = state.values();
+    repositories.for_each(|repository| {
+        let state = watch_state.clone();
+        let path = repository.path.clone();
+        task::spawn({
+            async move {
+                let mut state = state.lock().await;
+                let repository = state.get_mut(path.to_str().unwrap()).unwrap();
+
+                let elapsed = repository.last_change_at.elapsed();
+                if elapsed > repository.debounce_time {
+                    todo!("Commit and push");
+                }
+            }
+        });
+    });
 }
