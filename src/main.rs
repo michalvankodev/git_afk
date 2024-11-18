@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use watcher::start_watcher;
 
 mod config;
+mod git;
 mod watcher;
 
 /***

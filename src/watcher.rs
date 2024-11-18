@@ -1,6 +1,6 @@
-use crate::config::Configuration;
+use crate::{config::Configuration, git::commit_and_push};
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
-use log::{debug, info};
+use log::{debug, error, info};
 use notify::{EventKind, RecursiveMode};
 use notify_debouncer_full::{new_debouncer, DebounceEventResult, DebouncedEvent, Debouncer};
 use std::{
@@ -92,16 +92,11 @@ fn watch_repo(
             handle.spawn(async move {
                 match watch_result {
                     Ok(events) => {
-                        debug!("debouncer found ok event");
-                        // let mut watch_state = handle.block_on(watch_state.lock());
                         let mut watch_state = watch_state.lock().await;
-                        debug!("we got here?");
-                        println!("heee");
                         let repo_state = watch_state.get_mut(path.to_str().unwrap()).unwrap();
                         events
                             .into_iter()
                             .for_each(|event| handle_watch_event(&event, repo_state));
-                        debug!("events have been handled");
                     }
                     Err(errors) => errors
                         .iter()
@@ -121,8 +116,6 @@ fn watch_repo(
 }
 
 fn handle_watch_event(debounced_event: &DebouncedEvent, repo_state: &mut RepositoryState) {
-    debug!("We have a notify event {:?}", debounced_event);
-
     // Ignore events that we don't consider helpful
     let event_kind = debounced_event.event.kind;
     match event_kind {
@@ -132,6 +125,7 @@ fn handle_watch_event(debounced_event: &DebouncedEvent, repo_state: &mut Reposit
         }
     }
 
+    debug!("We have a notify event {:?}", debounced_event);
     // Ignore when in `.gitignore`
     let event_is_not_ignored = debounced_event.paths.iter().any(|path| {
         let is_dir = path.as_path().is_dir();
@@ -159,7 +153,10 @@ async fn check_for_timeouts(watch_state: Arc<Mutex<HashMap<String, RepositorySta
 
                 let elapsed = repository.last_change_at.elapsed();
                 if elapsed > repository.debounce_time {
-                    todo!("Commit and push");
+                    let result = commit_and_push(repository.path.clone()).await;
+                    if let Err(err) = result {
+                        error!("Error while committing {:?}: {}", &path, err);
+                    }
                 }
             }
         });
