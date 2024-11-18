@@ -61,3 +61,10 @@ async fn main() {
         }
     }
 }
+
+// TODO
+// git_afk remove command
+// custom commit msg
+// arguments for add command
+// automated release
+// cargo release
