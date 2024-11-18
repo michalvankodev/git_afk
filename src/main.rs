@@ -1,7 +1,6 @@
 use clap::{arg, command, Parser};
 use clap_derive::Subcommand;
-use config::add_repo;
-use log::error;
+use config::{add_repo, remove_repo};
 use std::path::PathBuf;
 use watcher::start_watcher;
 
@@ -34,37 +33,52 @@ enum Commands {
         /// Repository to add
         #[arg(required = true)]
         path: Vec<PathBuf>,
+
+        /// Number of seconds after which the changes are committed and pushed
+        /// The timer resets on any new change
+        #[arg(short, long, default_value_t = 360)]
+        debounce: u64,
+
+        /// Custom commit message that will be followed by " @ rfc2822 timestamp"
+        #[arg(short, long, default_value_t = String::from("Autocommited by git_afk"))]
+        msg: String,
+    },
+
+    /// Remove repositories from watch
+    #[command(arg_required_else_help = true)]
+    Remove {
+        /// Repository to add
+        #[arg(required = true)]
+        path: Vec<PathBuf>,
     },
     /// Starts a daemon process to watch all configured repositories
     Watch,
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), anyhow::Error> {
     let args = CliArgs::parse();
     env_logger::Builder::new()
         .filter_level(args.verbose.log_level_filter())
         .init();
 
     match args.command {
-        Commands::Add { path } => {
-            let add_result = add_repo(&path);
-            if let Err(error) = add_result {
-                error!("Failed to add repository to config: {:?}", error);
-            }
+        Commands::Add {
+            path,
+            debounce,
+            msg,
+        } => {
+            add_repo(&path, debounce, msg)?;
+        }
+        Commands::Remove { path } => {
+            remove_repo(&path)?;
         }
         Commands::Watch => {
-            let watch_result = start_watcher().await;
-            if let Err(error) = watch_result {
-                error!("Failed to start watching for file changes: {:?}", error);
-            }
+            start_watcher().await?;
         }
     }
+    Ok(())
 }
 
 // TODO
-// git_afk remove command
-// custom commit msg
-// arguments for add command
-// automated release
-// cargo release
+// figure out autostart

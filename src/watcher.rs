@@ -15,15 +15,22 @@ pub struct RepositoryState {
     path: PathBuf,
     gitignore_matcher: Gitignore,
     debounce_time: Duration,
+    commit_msg: String,
     last_change_at: Option<Instant>,
 }
 
 impl RepositoryState {
-    fn new(path: PathBuf, gitignore_matcher: Gitignore, debounce_time: Duration) -> Self {
+    fn new(
+        path: PathBuf,
+        gitignore_matcher: Gitignore,
+        debounce_time: Duration,
+        commit_msg: &str,
+    ) -> Self {
         Self {
             path,
             gitignore_matcher,
             debounce_time,
+            commit_msg: commit_msg.to_string(),
             // Expect every repo as _dirty_ on initialization
             last_change_at: Some(Instant::now()),
         }
@@ -42,10 +49,13 @@ pub async fn start_watcher() -> Result<(), anyhow::Error> {
             let debounce_time = repo.debounce_time;
             (
                 path.to_str().unwrap().to_string(),
-                RepositoryState::new(path, gitignore_matcher, debounce_time),
+                RepositoryState::new(path, gitignore_matcher, debounce_time, &repo.commit_msg),
             )
         }));
 
+    // THINK This state should probably come from higher up! We need to add and remove
+    // Or we should restart watcher if anything is removed or added to config.
+    // We can watch the config itself
     let watch_state = Arc::new(Mutex::new(initial_state));
     // What should I do here?
     // I want to loop over the repositories but the repositories have to be always updated when anything happens.
@@ -154,7 +164,8 @@ async fn check_for_timeouts(watch_state: Arc<Mutex<HashMap<String, RepositorySta
                 if let Some(last_change) = repository.last_change_at {
                     let elapsed = last_change.elapsed();
                     if elapsed > repository.debounce_time {
-                        let result = commit_and_push(repository.path.clone()).await;
+                        let result =
+                            commit_and_push(repository.path.clone(), &repository.commit_msg).await;
                         if let Err(err) = result {
                             error!("Error while committing {:?}: {}", &path, err);
                         }

@@ -4,7 +4,7 @@ use log::{debug, info};
 use std::path::{Path, PathBuf};
 use tokio::process::Command;
 
-pub async fn commit_and_push(path: PathBuf) -> Result<(), anyhow::Error> {
+pub async fn commit_and_push(path: PathBuf, commit_msg: &str) -> Result<(), anyhow::Error> {
     debug!("Checking for commiting changes to {:?}", &path);
 
     // Check the status of the repository
@@ -21,7 +21,7 @@ pub async fn commit_and_push(path: PathBuf) -> Result<(), anyhow::Error> {
         return Ok(());
     }
 
-    git_commit(path.clone()).await?;
+    git_commit(path.clone(), commit_msg).await?;
     git_push(path.clone()).await?;
 
     Ok(())
@@ -56,10 +56,10 @@ async fn has_uncommitted_changes(path: PathBuf) -> Result<bool, anyhow::Error> {
     Ok(!result.is_empty())
 }
 
-async fn git_commit(path: PathBuf) -> Result<(), anyhow::Error> {
+async fn git_commit(path: PathBuf, commit_msg: &str) -> Result<(), anyhow::Error> {
     let date = Local::now();
     let formatted_date = date.to_rfc2822();
-    let commit_msg = format!("Autocommitted by git_afk @ {}", formatted_date);
+    let commit_msg = format!("{} @ {}", commit_msg, formatted_date);
     info!("Committing changes to {:?}: {}", &path, &commit_msg);
 
     let _add = Command::new("git")
