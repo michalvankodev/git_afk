@@ -22,6 +22,7 @@ pub async fn commit_and_push(path: PathBuf) -> Result<(), anyhow::Error> {
     }
 
     git_commit(path.clone()).await?;
+    git_push(path.clone()).await?;
 
     Ok(())
 }
@@ -73,6 +74,18 @@ async fn git_commit(path: PathBuf) -> Result<(), anyhow::Error> {
         .arg("commit")
         .arg("-m")
         .arg(&commit_msg)
+        .output()
+        .await?;
+
+    Ok(())
+}
+
+async fn git_push(path: PathBuf) -> Result<(), anyhow::Error> {
+    info!("Pushing to remote {:?}", &path);
+
+    let _push = Command::new("git")
+        .current_dir(&path)
+        .arg("push")
         .output()
         .await?;
 

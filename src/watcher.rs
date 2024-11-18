@@ -15,7 +15,7 @@ pub struct RepositoryState {
     path: PathBuf,
     gitignore_matcher: Gitignore,
     debounce_time: Duration,
-    last_change_at: Instant,
+    last_change_at: Option<Instant>,
 }
 
 impl RepositoryState {
@@ -24,7 +24,8 @@ impl RepositoryState {
             path,
             gitignore_matcher,
             debounce_time,
-            last_change_at: Instant::now(),
+            // Expect every repo as _dirty_ on initialization
+            last_change_at: Some(Instant::now()),
         }
     }
 }
@@ -137,7 +138,7 @@ fn handle_watch_event(debounced_event: &DebouncedEvent, repo_state: &mut Reposit
         return;
     }
 
-    repo_state.last_change_at = Instant::now();
+    repo_state.last_change_at = Some(Instant::now());
 }
 
 async fn check_for_timeouts(watch_state: Arc<Mutex<HashMap<String, RepositoryState>>>) {
@@ -150,12 +151,14 @@ async fn check_for_timeouts(watch_state: Arc<Mutex<HashMap<String, RepositorySta
             async move {
                 let mut state = state.lock().await;
                 let repository = state.get_mut(path.to_str().unwrap()).unwrap();
-
-                let elapsed = repository.last_change_at.elapsed();
-                if elapsed > repository.debounce_time {
-                    let result = commit_and_push(repository.path.clone()).await;
-                    if let Err(err) = result {
-                        error!("Error while committing {:?}: {}", &path, err);
+                if let Some(last_change) = repository.last_change_at {
+                    let elapsed = last_change.elapsed();
+                    if elapsed > repository.debounce_time {
+                        let result = commit_and_push(repository.path.clone()).await;
+                        if let Err(err) = result {
+                            error!("Error while committing {:?}: {}", &path, err);
+                        }
+                        repository.last_change_at = None;
                     }
                 }
             }
