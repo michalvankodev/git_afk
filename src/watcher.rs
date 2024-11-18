@@ -1,6 +1,7 @@
 use crate::config::Configuration;
+use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use log::{debug, info};
-use notify::RecursiveMode;
+use notify::{EventKind, RecursiveMode};
 use notify_debouncer_full::{new_debouncer, DebounceEventResult, DebouncedEvent, Debouncer};
 use std::{
     collections::HashMap,
@@ -8,17 +9,19 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use tokio::{sync::Mutex, time::sleep};
+use tokio::{runtime::Handle, sync::Mutex, time::sleep};
 
 pub struct RepositoryState {
     path: PathBuf,
+    gitignore_matcher: Gitignore,
     last_change_at: Instant,
 }
 
 impl RepositoryState {
-    fn new(path: PathBuf) -> Self {
+    fn new(path: PathBuf, gitignore_matcher: Gitignore) -> Self {
         Self {
             path,
+            gitignore_matcher,
             last_change_at: Instant::now(),
         }
     }
@@ -32,9 +35,10 @@ pub async fn start_watcher() -> Result<(), anyhow::Error> {
     let initial_state: HashMap<String, RepositoryState> =
         HashMap::from_iter(cfg.repositories.iter().map(|repo| {
             let path = repo.path.clone();
+            let gitignore_matcher = GitignoreBuilder::new(&path).build().unwrap();
             (
                 path.to_str().unwrap().to_string(),
-                RepositoryState::new(path),
+                RepositoryState::new(path, gitignore_matcher),
             )
         }));
 
@@ -49,8 +53,10 @@ pub async fn start_watcher() -> Result<(), anyhow::Error> {
 
     let _debouncers = repositories
         .values()
-        .map(watch_repo)
+        .map(|repo_state| watch_repo(watch_state.clone(), repo_state.path.clone()))
         .collect::<Vec<Debouncer<notify::INotifyWatcher, notify_debouncer_full::NoCache>>>();
+
+    drop(repositories);
 
     // Main application loop
     info!("Starting git_afk to watch repositories");
@@ -63,32 +69,72 @@ pub async fn start_watcher() -> Result<(), anyhow::Error> {
 }
 
 fn watch_repo(
-    repo_state: &RepositoryState,
+    watch_state: Arc<Mutex<HashMap<String, RepositoryState>>>,
+    path: PathBuf,
 ) -> Debouncer<notify::INotifyWatcher, notify_debouncer_full::NoCache> {
-    debug!("Starting check for changes for {:?}!", repo_state.path);
+    debug!("Starting check for changes for {:?}!", path);
+    let path_clone = path.clone();
+    let handle = Handle::current();
 
     let mut debouncer = new_debouncer(
         Duration::from_secs(2),
         None,
-        |watch_result: DebounceEventResult| match watch_result {
-            Ok(events) => events
-                .into_iter()
-                .for_each(|event| handle_watch_event(&event)),
-            Err(errors) => errors
-                .iter()
-                .for_each(|error| println!("notify error {error:?}")),
+        move |watch_result: DebounceEventResult| {
+            let watch_state = watch_state.clone();
+            let path = path.clone();
+            handle.spawn(async move {
+                match watch_result {
+                    Ok(events) => {
+                        debug!("debouncer found ok event");
+                        // let mut watch_state = handle.block_on(watch_state.lock());
+                        let mut watch_state = watch_state.lock().await;
+                        debug!("we got here?");
+                        println!("heee");
+                        let repo_state = watch_state.get_mut(path.to_str().unwrap()).unwrap();
+                        events
+                            .into_iter()
+                            .for_each(|event| handle_watch_event(&event, repo_state));
+                        debug!("events have been handled");
+                    }
+                    Err(errors) => errors
+                        .iter()
+                        .for_each(|error| println!("notify error {error:?}")),
+                }
+            });
         },
     )
     .unwrap();
 
     debouncer
-        .watch(&repo_state.path, RecursiveMode::Recursive)
+        .watch(&path_clone, RecursiveMode::Recursive)
         .unwrap();
 
-    debug!("Watcher for {:?} has been initialized", repo_state.path);
+    debug!("Watcher for {:?} has been initialized", &path_clone);
     debouncer
 }
 
-fn handle_watch_event(event: &DebouncedEvent) {
-    debug!("We have a notify event {:?}", event);
+fn handle_watch_event(debounced_event: &DebouncedEvent, repo_state: &mut RepositoryState) {
+    debug!("We have a notify event {:?}", debounced_event);
+
+    // Ignore events that we don't consider helpful
+    let event_kind = debounced_event.event.kind;
+    match event_kind {
+        EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_) => (),
+        _ => {
+            return;
+        }
+    }
+
+    // Ignore when in `.gitignore`
+    let event_is_not_ignored = debounced_event.paths.iter().any(|path| {
+        let is_dir = path.as_path().is_dir();
+        let match_path = repo_state.gitignore_matcher.matched(path, is_dir);
+        !match_path.is_ignore()
+    });
+
+    if !event_is_not_ignored {
+        return;
+    }
+
+    repo_state.last_change_at = Instant::now();
 }
