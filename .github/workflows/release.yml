@@ -1,0 +1,81 @@
+on:
+  release:
+    types: [created]
+    
+# We need this to be able to create releases.
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: release ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            archive: tar.gz
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            archive: tar.gz
+          - target: x86_64-pc-windows-gnu
+            os: windows-latest
+            archive: zip
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+          shared-key: ${{matrix.target}}-cache
+
+      - name: Compile binaries
+        shell: bash
+        run: |
+          cargo build --verbose --release
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            bin="target/release/git_afk.exe"
+          else
+            bin="target/release/git_afk"
+          fi
+          echo "BIN=$bin" >> $GITHUB_ENV
+
+      - name: Determine archive name
+        shell: bash
+        run: |
+          echo "ARCHIVE=git_afk-${{ github.event.tag_name }}-${{ matrix.target }}" >> $GITHUB_ENV
+
+      - name: Create archive
+        shell: bash
+        run: |
+          mkdir -p "$ARCHIVE"
+          cp "$BIN" "$ARCHIVE"/
+          cp {README.md,LICENSE} "$ARCHIVE"/
+
+      - name: Build archive (zip)
+        shell: bash
+        if: matrix.archive == 'zip'
+        run: |
+          7z a "$ARCHIVE.zip" "$ARCHIVE"
+          certutil -hashfile "$ARCHIVE.zip" SHA256 > "$ARCHIVE.zip.sha256"
+          echo "ASSET=$ARCHIVE.zip" >> $GITHUB_ENV
+          echo "ASSET_SUM=$ARCHIVE.zip.sha256" >> $GITHUB_ENV
+
+      - name: Build archive (Unix)
+        shell: bash
+        if: matrix.archive == 'tar.gz'
+        run: |
+          tar czf "$ARCHIVE.tar.gz" "$ARCHIVE"
+          shasum -a 256 "$ARCHIVE.tar.gz" > "$ARCHIVE.tar.gz.sha256"
+          echo "ASSET=$ARCHIVE.tar.gz" >> $GITHUB_ENV
+          echo "ASSET_SUM=$ARCHIVE.tar.gz.sha256" >> $GITHUB_ENV
+
+      - name: Upload release archive
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" ${{ env.ASSET }} ${{ env.ASSET_SUM }}
+
