@@ -79,6 +79,3 @@ async fn main() -> Result<(), anyhow::Error> {
     }
     Ok(())
 }
-
-// TODO
-// figure out autostart
