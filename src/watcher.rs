@@ -1,8 +1,10 @@
 use crate::{config::Configuration, git::commit_and_push};
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use log::{debug, error, info};
-use notify::{EventKind, RecursiveMode};
-use notify_debouncer_full::{new_debouncer, DebounceEventResult, DebouncedEvent, Debouncer};
+use notify::{EventKind, INotifyWatcher, RecursiveMode};
+use notify_debouncer_full::{
+    new_debouncer, DebounceEventResult, DebouncedEvent, Debouncer, NoCache,
+};
 use std::{
     collections::HashMap,
     path::PathBuf,
@@ -38,52 +40,43 @@ impl RepositoryState {
 }
 
 pub async fn start_watcher() -> Result<(), anyhow::Error> {
-    // What do wen eed to do at start???
-    // Parse config file to initialize watching repositories
-    let cfg: Configuration = confy::load("git_afk", None)?;
-
-    let initial_state: HashMap<String, RepositoryState> =
-        HashMap::from_iter(cfg.repositories.iter().map(|repo| {
-            let path = repo.path.clone();
-            let gitignore_matcher = GitignoreBuilder::new(&path).build().unwrap();
-            let debounce_time = repo.debounce_time;
-            (
-                path.to_str().unwrap().to_string(),
-                RepositoryState::new(path, gitignore_matcher, debounce_time, &repo.commit_msg),
-            )
-        }));
-
-    // THINK This state should probably come from higher up! We need to add and remove
-    // Or we should restart watcher if anything is removed or added to config.
-    // We can watch the config itself
+    // Watch configuration file for changes
+    let cfg_path = confy::get_configuration_file_path("git_afk", None).unwrap();
+    let watcher_handles = Arc::new(Mutex::new(vec![]));
+    let initial_state = parse_config();
     let watch_state = Arc::new(Mutex::new(initial_state));
-    // What should I do here?
-    // I want to loop over the repositories but the repositories have to be always updated when anything happens.
-    // Whenever a repository is added/removed from the config we should store the state and restart?
-    // I will need to send the signal to the watcher that it should reload
-
-    let state_clone = watch_state.clone();
-    let repositories = state_clone.lock().await;
-
-    let _debouncers = repositories
-        .values()
-        .map(|repo_state| watch_repo(watch_state.clone(), repo_state.path.clone()))
-        .collect::<Vec<Debouncer<notify::INotifyWatcher, notify_debouncer_full::NoCache>>>();
-
-    drop(repositories);
+    let _cfg_watcher = watch_cfg(cfg_path, watch_state.clone(), watcher_handles.clone()).await;
+    {
+        let mut handles = watcher_handles.lock().await;
+        *handles = get_repo_watchers(watch_state.clone()).await?;
+    }
 
     // Main application loop
     info!("Starting git_afk to watch repositories");
     loop {
-        // Check all watched repositories whether we want to commit and push
         debug!("Checking repositories");
-        let watch_state = watch_state.clone();
-        check_for_timeouts(watch_state).await;
+        check_for_timeouts(watch_state.clone()).await;
 
         debug!("Waiting for another loop");
-        // Sleep for 5 seconds
         sleep(Duration::from_secs(5)).await;
     }
+}
+
+pub async fn get_repo_watchers(
+    watch_state: Arc<Mutex<HashMap<String, RepositoryState>>>,
+) -> Result<Vec<Debouncer<INotifyWatcher, NoCache>>, anyhow::Error> {
+    // Parse config file to initialize watching repositories
+    // We should restart watcher if anything is removed or added to config.
+    // We can watch the config itself
+
+    let state_clone = watch_state.clone();
+    let repositories = state_clone.lock().await;
+
+    let debouncers = repositories
+        .values()
+        .map(|repo_state| watch_repo(watch_state.clone(), repo_state.path.clone()))
+        .collect::<Vec<Debouncer<notify::INotifyWatcher, notify_debouncer_full::NoCache>>>();
+    Ok(debouncers)
 }
 
 fn watch_repo(
@@ -175,4 +168,102 @@ async fn check_for_timeouts(watch_state: Arc<Mutex<HashMap<String, RepositorySta
             }
         });
     });
+}
+
+fn parse_config() -> HashMap<String, RepositoryState> {
+    let cfg: Configuration = confy::load("git_afk", None).unwrap();
+
+    HashMap::from_iter(cfg.repositories.iter().map(|repo| {
+        let path = repo.path.clone();
+        let gitignore_matcher = GitignoreBuilder::new(&path).build().unwrap();
+        let debounce_time = repo.debounce_time;
+        (
+            path.to_str().unwrap().to_string(),
+            RepositoryState::new(path, gitignore_matcher, debounce_time, &repo.commit_msg),
+        )
+    }))
+}
+
+async fn watch_cfg(
+    path: PathBuf,
+    watch_state: Arc<Mutex<HashMap<String, RepositoryState>>>,
+    watcher_handles: Arc<
+        Mutex<Vec<Debouncer<notify::INotifyWatcher, notify_debouncer_full::NoCache>>>,
+    >,
+) -> Debouncer<notify::INotifyWatcher, notify_debouncer_full::NoCache> {
+    debug!("Watching cfg file for changes: {:?}", path);
+    let path_clone = path.clone();
+    let handle = Handle::current();
+
+    let mut debouncer = new_debouncer(
+        Duration::from_secs(2),
+        None,
+        move |watch_result: DebounceEventResult| {
+            let watch_state = watch_state.clone();
+            let watcher_handles = watcher_handles.clone();
+            handle.spawn(async move {
+                match watch_result {
+                    Ok(events) => {
+                        let trigger_events = events
+                            .into_iter()
+                            .filter(|event| {
+                                matches!(
+                                    event.kind,
+                                    EventKind::Create(_)
+                                        | EventKind::Modify(_)
+                                        | EventKind::Remove(_)
+                                )
+                            })
+                            .count();
+                        if trigger_events > 0 {
+                            info!("Configuration file was modified. Reloading!");
+                            reload_watchers(watch_state, watcher_handles).await;
+                        }
+                    }
+                    Err(errors) => errors
+                        .iter()
+                        .for_each(|error| println!("notify error {error:?}")),
+                }
+            });
+        },
+    )
+    .unwrap();
+
+    debouncer
+        .watch(&path_clone, RecursiveMode::NonRecursive)
+        .unwrap();
+
+    debug!(
+        "Watcher for {:?} configuration file has been initialized",
+        &path_clone
+    );
+    debouncer
+}
+
+async fn reload_watchers(
+    watch_state: Arc<Mutex<HashMap<String, RepositoryState>>>,
+    watcher_handles: Arc<
+        Mutex<Vec<Debouncer<notify::INotifyWatcher, notify_debouncer_full::NoCache>>>,
+    >,
+) {
+    // Stop all existing watchers
+    {
+        let mut handles = watcher_handles.lock().await;
+        handles.clear();
+    }
+
+    // Reload configuration and restart repository watchers
+    let new_state = parse_config();
+    *watch_state.lock().await = new_state;
+
+    let new_handles = watch_state
+        .lock()
+        .await
+        .values()
+        .map(|repo_state| watch_repo(watch_state.clone(), repo_state.path.clone()))
+        .collect::<Vec<_>>();
+
+    *watcher_handles.lock().await = new_handles;
+
+    info!("Watchers reloaded after configuration change.");
 }
