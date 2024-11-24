@@ -13,7 +13,7 @@ categories = ["command-line-utilities"]
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
-clap-verbosity-flag = "2.2.0"
+clap-verbosity-flag = "3.0.0"
 clap_derive = { version = "4.5.5" } 
 confy = "0.6.1"
 ignore = "0.4.23"
