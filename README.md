@@ -22,16 +22,22 @@ For the best convenience it is recommended to run the `git_afk watch` as a daemo
 
 Copy this `git_afk.service` file to your services folders e.g. `~/.config/systemd/user/`
 
+
 ```systemd
 [Unit]
 Description=git_afk
+After=ssh-agent.service
+Requires=ssh-agent.service
 
 [Service]
 ExecStart=git_afk watch
+Environment="SSH_AUTH_SOCK=/run/user/1000/keyring/ssh"
 
 [Install]
 WantedBy=default.target
 ```
+
+> `git_afk` needs to be started with an ability to commit to git repository. If you use `ssh` connection to git it requires `SSH_AUTH_SOCK` to be specified in environment prior to running system service.
 
 #### Other systems
 

@@ -1,6 +1,6 @@
 use chrono::Local;
 use core::str;
-use log::{debug, info};
+use log::{debug, info, trace, warn};
 use std::path::{Path, PathBuf};
 use tokio::process::Command;
 
@@ -9,7 +9,7 @@ pub async fn commit_and_push(path: PathBuf, commit_msg: &str) -> Result<(), anyh
 
     // Check the status of the repository
     if is_repo_in_rebase_or_merge(path.clone()) {
-        info!("Repository is in state which is not suitable for automatic commit!");
+        warn!("Repository is in state which is not suitable for automatic commit!");
         // return Err(anyhow!(
         //     "Repository is not in state suitable for automatic commit"
         // ));
@@ -81,13 +81,26 @@ async fn git_commit(path: PathBuf, commit_msg: &str) -> Result<(), anyhow::Error
 }
 
 async fn git_push(path: PathBuf) -> Result<(), anyhow::Error> {
-    info!("Pushing to remote {:?}", &path);
+    trace!("Pushing to remote {:?}", &path);
 
     let _push = Command::new("git")
         .current_dir(&path)
         .arg("push")
+        .arg("--porcelain")
         .output()
         .await?;
+
+    let result = str::from_utf8(&_push.stdout)?;
+    let err_out = String::from_utf8_lossy(&_push.stderr);
+
+    if !_push.status.success() {
+        warn!("Pushing to remote failed: {err_out:?}")
+    } else {
+        info!(
+            "Repository has been pushed to remote {:?} - {:?}",
+            &path, result
+        );
+    }
 
     Ok(())
 }

@@ -1,6 +1,6 @@
 use crate::{config::Configuration, git::commit_and_push};
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
-use log::{debug, error, info};
+use log::{debug, error, info, trace};
 use notify::{EventKind, INotifyWatcher, RecursiveMode};
 use notify_debouncer_full::{
     new_debouncer, DebounceEventResult, DebouncedEvent, Debouncer, NoCache,
@@ -12,6 +12,8 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::{runtime::Handle, sync::Mutex, task, time::sleep};
+
+const LOOP_CHECK_SLEEP_TIME: u64 = 10;
 
 pub struct RepositoryState {
     path: PathBuf,
@@ -54,11 +56,11 @@ pub async fn start_watcher() -> Result<(), anyhow::Error> {
     // Main application loop
     info!("Starting git_afk to watch repositories");
     loop {
-        debug!("Checking repositories");
+        trace!("Checking repositories");
         check_for_timeouts(watch_state.clone()).await;
 
-        debug!("Waiting for another loop");
-        sleep(Duration::from_secs(5)).await;
+        trace!("Waiting for another loop");
+        sleep(Duration::from_secs(LOOP_CHECK_SLEEP_TIME)).await;
     }
 }
 
