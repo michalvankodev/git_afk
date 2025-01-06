@@ -1,4 +1,7 @@
-use crate::{config::Configuration, git::commit_and_push};
+use crate::{
+    config::Configuration,
+    git::{commit_and_push, pull},
+};
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use log::{debug, error, info, trace};
 use notify::{EventKind, INotifyWatcher, RecursiveMode};
@@ -21,6 +24,7 @@ pub struct RepositoryState {
     debounce_time: Duration,
     commit_msg: String,
     last_change_at: Option<Instant>,
+    next_pull_at: Option<Instant>,
 }
 
 impl RepositoryState {
@@ -37,6 +41,7 @@ impl RepositoryState {
             commit_msg: commit_msg.to_string(),
             // Expect every repo as _dirty_ on initialization
             last_change_at: Some(Instant::now()),
+            next_pull_at: None,
         }
     }
 }
@@ -136,7 +141,12 @@ fn handle_watch_event(debounced_event: &DebouncedEvent, repo_state: &mut Reposit
     let event_is_not_ignored = debounced_event.paths.iter().any(|path| {
         let is_dir = path.as_path().is_dir();
         let match_path = repo_state.gitignore_matcher.matched(path, is_dir);
-        !match_path.is_ignore()
+        let is_git_path = path.ancestors().any(|folder| {
+            folder
+                .file_name()
+                .is_some_and(|file_name| file_name.eq(".git"))
+        });
+        !(is_git_path || match_path.is_ignore())
     });
 
     if !event_is_not_ignored {
@@ -144,11 +154,13 @@ fn handle_watch_event(debounced_event: &DebouncedEvent, repo_state: &mut Reposit
     }
 
     repo_state.last_change_at = Some(Instant::now());
+    repo_state.next_pull_at = None;
 }
 
 async fn check_for_timeouts(watch_state: Arc<Mutex<HashMap<String, RepositoryState>>>) {
     let state = watch_state.lock().await;
     let repositories = state.values();
+
     repositories.for_each(|repository| {
         let state = watch_state.clone();
         let path = repository.path.clone();
@@ -156,6 +168,7 @@ async fn check_for_timeouts(watch_state: Arc<Mutex<HashMap<String, RepositorySta
             async move {
                 let mut state = state.lock().await;
                 let repository = state.get_mut(path.to_str().unwrap()).unwrap();
+
                 if let Some(last_change) = repository.last_change_at {
                     let elapsed = last_change.elapsed();
                     if elapsed > repository.debounce_time {
@@ -165,6 +178,17 @@ async fn check_for_timeouts(watch_state: Arc<Mutex<HashMap<String, RepositorySta
                             error!("Error while committing {:?}: {}", &path, err);
                         }
                         repository.last_change_at = None;
+                        repository.next_pull_at = Some(Instant::now() + repository.debounce_time);
+                    }
+                }
+
+                if let Some(next_pull) = repository.next_pull_at {
+                    if Instant::now() > next_pull {
+                        let result = pull(repository.path.clone()).await;
+                        if let Err(err) = result {
+                            error!("Error while pulling {:?}: {}", &path, err);
+                        }
+                        repository.next_pull_at = Some(Instant::now() + repository.debounce_time);
                     }
                 }
             }

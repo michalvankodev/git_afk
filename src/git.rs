@@ -1,6 +1,6 @@
 use chrono::Local;
 use core::str;
-use log::{debug, info, trace, warn};
+use log::{debug, error, info, trace, warn};
 use std::path::{Path, PathBuf};
 use tokio::process::Command;
 
@@ -23,6 +23,28 @@ pub async fn commit_and_push(path: PathBuf, commit_msg: &str) -> Result<(), anyh
 
     git_commit(path.clone(), commit_msg).await?;
     git_push(path.clone()).await?;
+
+    Ok(())
+}
+
+pub async fn pull(path: PathBuf) -> Result<(), anyhow::Error> {
+    debug!("Pulling repository {:?}", &path);
+
+    // Check the status of the repository
+    if is_repo_in_rebase_or_merge(path.clone()) {
+        warn!("Repository is in state which is not suitable for automatic pulling!");
+        return Ok(());
+    }
+
+    if has_uncommitted_changes(path.clone()).await? {
+        error!(
+            "Uncommitted changes present while trying to pull {:?}",
+            path.clone()
+        );
+        return Ok(());
+    }
+
+    git_pull(path.clone()).await?;
 
     Ok(())
 }
@@ -83,21 +105,47 @@ async fn git_commit(path: PathBuf, commit_msg: &str) -> Result<(), anyhow::Error
 async fn git_push(path: PathBuf) -> Result<(), anyhow::Error> {
     trace!("Pushing to remote {:?}", &path);
 
-    let _push = Command::new("git")
+    let push = Command::new("git")
         .current_dir(&path)
         .arg("push")
         .arg("--porcelain")
         .output()
         .await?;
 
-    let result = str::from_utf8(&_push.stdout)?;
-    let err_out = String::from_utf8_lossy(&_push.stderr);
+    let result = str::from_utf8(&push.stdout)?;
+    let err_out = String::from_utf8_lossy(&push.stderr);
 
-    if !_push.status.success() {
+    if !push.status.success() {
         warn!("Pushing to remote failed: {err_out:?}")
     } else {
         info!(
             "Repository has been pushed to remote {:?} - {:?}",
+            &path, result
+        );
+    }
+
+    Ok(())
+}
+
+async fn git_pull(path: PathBuf) -> Result<(), anyhow::Error> {
+    trace!("pulling from remote {:?}", &path);
+
+    let pull = Command::new("git")
+        .current_dir(&path)
+        .arg("pull")
+        .arg("--rebase")
+        // .arg("--porcelain")
+        .output()
+        .await?;
+
+    let result = str::from_utf8(&pull.stdout)?;
+    let err_out = String::from_utf8_lossy(&pull.stderr);
+
+    if !pull.status.success() {
+        warn!("Pulling from remote failed: {err_out:?}")
+    } else {
+        info!(
+            "Repository has been updated with remote {:?} - {:?}",
             &path, result
         );
     }
