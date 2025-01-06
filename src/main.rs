@@ -1,6 +1,6 @@
 use clap::{arg, command, Parser};
 use clap_derive::Subcommand;
-use config::{add_repo, remove_repo};
+use config::{add_repo, list_repos, remove_repo};
 use std::path::PathBuf;
 use watcher::start_watcher;
 
@@ -51,6 +51,9 @@ enum Commands {
         #[arg(required = true)]
         path: Vec<PathBuf>,
     },
+
+    /// List configured repositories
+    List,
     /// Starts a daemon process to watch all configured repositories
     Watch,
 }
@@ -75,6 +78,9 @@ async fn main() -> Result<(), anyhow::Error> {
         }
         Commands::Watch => {
             start_watcher().await?;
+        }
+        Commands::List => {
+            list_repos()?;
         }
     }
     Ok(())

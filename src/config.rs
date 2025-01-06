@@ -77,6 +77,22 @@ pub fn remove_repo(path: &Vec<PathBuf>) -> Result<(), anyhow::Error> {
     Ok(())
 }
 
+pub fn list_repos() -> Result<(), anyhow::Error> {
+    let cfg: Configuration = confy::load("git_afk", None)?;
+
+    if cfg.repositories.is_empty() {
+        println!("No repositories configured!");
+    } else {
+        println!("These folders are configured for watching");
+    }
+
+    cfg.repositories
+        .iter()
+        .for_each(|repo| println!("{:?} \t \t {}s ", repo.path, repo.debounce_time.as_secs()));
+
+    Ok(())
+}
+
 fn get_absolute_path(path: &PathBuf) -> PathBuf {
     std::path::absolute(path).unwrap().canonicalize().unwrap()
 }
