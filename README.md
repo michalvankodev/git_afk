@@ -6,6 +6,7 @@
 
 Watch the **selected repositories** for changes in the worktree.
 If the changes in the worktree are not changed for **predefined debounce** time, it should **if possible** commit changes with specific commit message and try to push them. If the commit or the push fails. We can just reset the timer.
+If there are no changes it will use the same configured debounce time to pull changes from the remote.
 
 ## Installation
 
